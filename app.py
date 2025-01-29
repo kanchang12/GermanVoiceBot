@@ -136,11 +136,11 @@ class ConversationManager:
         emotions['is_shouting'] = text.isupper() or text.count('!') > 1
         return emotions
 
-    async def process_speech(self, user_speech):
+    def process_speech(self, user_speech):
         """Pre-process speech input"""
         return user_speech.strip()
 
-    async def get_response(self, user_input, phone_number=None, call_sid=None):
+    def get_response(self, user_input, phone_number=None, call_sid=None):
         try:
             current_time = datetime.now(pytz.UTC)
             
@@ -153,7 +153,7 @@ class ConversationManager:
                 }
             
             # Process speech
-            processed_input = await self.process_speech(user_input)
+            processed_input = self.process_speech(user_input)
             
             # Get emotion context
             emotions = self.detect_emotion_and_context(processed_input)
@@ -191,8 +191,7 @@ class ConversationManager:
                 messages.append({"role": "user", "content": processed_input})
 
                 # Get OpenAI response
-                response = await asyncio.to_thread(
-                    self.client.chat.completions.create,
+                response = self.client.chat.completions.create(
                     model="gpt-4-turbo-preview",
                     messages=messages,
                     max_tokens=150,
@@ -233,6 +232,7 @@ class ConversationManager:
 
 # Initialize manager
 conversation_manager = ConversationManager()
+
 
 @app.route("/incoming-call", methods=['POST'])
 def incoming_call():
