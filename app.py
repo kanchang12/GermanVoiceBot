@@ -12,7 +12,7 @@ import speech_recognition as sr
 from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse, Gather
 import io
-
+app = Flask(__name__)
 # Load environment variables
 load_dotenv()
 
