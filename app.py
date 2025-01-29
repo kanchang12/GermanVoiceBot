@@ -175,12 +175,15 @@ class ConversationManager:
 @app.route("/incoming-call", methods=['POST'])
 def incoming_call():
     response = VoiceResponse()
+            # Fixed Gather settings
+
     gather = Gather(
         input='speech dtmf',
         action='/handle-input',
         method='POST',
         language='en-GB',
         speechTimeout='auto',
+        interim=False,
         enhanced=True,
         speechModel='phone_call'
     )
