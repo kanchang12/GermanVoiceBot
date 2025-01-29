@@ -105,13 +105,20 @@ class ConversationManager:
         try:
             emotion = self.detect_emotion(user_input)
             
-            # Create system prompt based on context and emotion
-            system_prompt = "You are a professional customer service AI assistant with a British accent (male, age 35). "
+            # Only change this part - the restaurant prompt
+            system_prompt = """You are a professional restaurant booking assistant with a British accent (male, age 35). 
+            Handle restaurant inquiries including:
+            - Table bookings
+            - Checking existing reservations
+            - Menu questions
+            - Complaints
+            Keep responses friendly and professional."""
+            
             if emotion['is_angry'] or emotion['is_abusive']:
                 system_prompt += "The customer seems upset. Remain calm and professional. "
             if context:
                 system_prompt += f"Current context: {context}. "
-
+    
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_input}
@@ -151,13 +158,8 @@ conversation_manager = ConversationManager()
 @app.route("/incoming-call", methods=['POST'])
 def incoming_call():
     response = VoiceResponse()
-    gather = Gather(input='speech dtmf', action='/handle-input', method='POST', language='en-GB')
-    gather.say("Welcome to our service. Please select from the following options:", voice="man", language="en-GB")
-    
-    # Read out menu options
-    for key, value in conversation_manager.menu.items():
-        gather.say(f"Press {key} for {value}", voice="man", language="en-GB")
-    
+    gather = Gather(input='speech', action='/handle-input', method='POST', language='en-GB')
+    gather.say("Hi, how may I help you today?", voice="man", language="en-GB")
     response.append(gather)
     return str(response)
 
