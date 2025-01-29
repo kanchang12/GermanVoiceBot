@@ -118,28 +118,6 @@ class ConversationManager:
         self.response_cache = {}
         self.current_time = datetime.now(pytz.UTC)
 
-    def detect_emotion_and_context(self, text):
-        emotion_indicators = {
-            'angry': ['angry', 'furious', 'upset', 'horrible', 'terrible', 'stupid', 'useless'],
-            'frustrated': ['annoying', 'frustrating', 'difficult', 'problem', 'issue'],
-            'urgent': ['immediately', 'urgent', 'asap', 'emergency', 'right now'],
-            'positive': ['happy', 'great', 'wonderful', 'excellent', 'perfect', 'thanks'],
-            'confused': ['confused', 'unsure', 'don\'t understand', 'what do you mean']
-        }
-        
-        text_lower = text.lower()
-        emotions = {
-            emotion: any(word in text_lower for word in words)
-            for emotion, words in emotion_indicators.items()
-        }
-        
-        emotions['is_shouting'] = text.isupper() or text.count('!') > 1
-        return emotions
-
-    def process_speech(self, user_speech):
-        """Pre-process speech input"""
-        return user_speech.strip()
-
     def get_response(self, user_input, phone_number=None, call_sid=None):
         try:
             current_time = datetime.now(pytz.UTC)
@@ -190,7 +168,7 @@ class ConversationManager:
                 messages.extend(self.conversation_memory[call_sid]['messages'])
                 messages.append({"role": "user", "content": processed_input})
 
-                # Get OpenAI response
+                # Synchronous call to OpenAI (no async/await)
                 response = self.client.chat.completions.create(
                     model="gpt-4-turbo-preview",
                     messages=messages,
@@ -201,7 +179,7 @@ class ConversationManager:
                 assistant_response = response.choices[0].message.content.strip()
 
                 # Update conversation memory with new messages
-                self.conversation_memory[call_sid]['messages'].extend([
+                self.conversation_memory[call_sid]['messages'].extend([ 
                     {"role": "user", "content": processed_input},
                     {"role": "assistant", "content": assistant_response}
                 ])
