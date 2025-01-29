@@ -5,11 +5,66 @@ from dotenv import load_dotenv
 from datetime import datetime
 import pytz
 from docx import Document
+import json
+import hashlib
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
+
+class CustomerHistory:
+    def __init__(self, file_path='customer_history.json'):
+        self.file_path = file_path
+        self.history = self.load_history()
+
+    def load_history(self):
+        try:
+            if os.path.exists(self.file_path):
+                with open(self.file_path, 'r') as f:
+                    return json.load(f)
+            return {}
+        except Exception as e:
+            print(f"Error loading history: {e}")
+            return {}
+
+    def save_history(self):
+        try:
+            with open(self.file_path, 'w') as f:
+                json.dump(self.history, f, indent=4)
+        except Exception as e:
+            print(f"Error saving history: {e}")
+
+    def get_customer_key(self, email, dob):
+        # Create a unique key based on email and DOB
+        return hashlib.md5(f"{email.lower()}{dob}".encode()).hexdigest()
+
+    def get_customer_history(self, email, dob):
+        customer_key = self.get_customer_key(email, dob)
+        return self.history.get(customer_key, {})
+
+    def update_customer_history(self, email, dob, conversation_data):
+        customer_key = self.get_customer_key(email, dob)
+        
+        if customer_key not in self.history:
+            self.history[customer_key] = {
+                "email": email,
+                "dob": dob,
+                "conversations": [],
+                "last_interaction": None,
+                "interaction_count": 0
+            }
+
+        # Update customer history
+        self.history[customer_key]["conversations"].append(conversation_data)
+        self.history[customer_key]["last_interaction"] = datetime.now(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
+        self.history[customer_key]["interaction_count"] += 1
+        
+        # Keep only last 10 conversations
+        if len(self.history[customer_key]["conversations"]) > 10:
+            self.history[customer_key]["conversations"] = self.history[customer_key]["conversations"][-10:]
+
+        self.save_history()
 
 class ConversationManager:
     def __init__(self):
@@ -17,13 +72,14 @@ class ConversationManager:
         self.client = OpenAI(api_key=self.openai_api_key)
         self.conversation_history = []
         self.dummy_data = self.load_word_document('path_to_your_document.docx')
+        self.customer_history = CustomerHistory()
 
     def load_word_document(self, file_path):
         doc = Document(file_path)
         return '\n'.join([paragraph.text for paragraph in doc.paragraphs])
 
-    def _create_system_prompt(self):
-        return f"""You are an empathetic and professional customer service AI assistant. Your role is to:
+    def _create_system_prompt(self, customer_data=None):
+        base_prompt = f"""You are an empathetic and professional customer service AI assistant. Your role is to:
 
 1. ALWAYS remain calm and professional, especially when dealing with angry or frustrated customers
 2. Handle interruptions gracefully and maintain conversation flow
@@ -31,6 +87,19 @@ class ConversationManager:
 4. Provide accurate information based on the following company data:
 {self.dummy_data}
 
+"""
+        if customer_data:
+            previous_interactions = f"""
+Customer History:
+- Previous interactions: {customer_data.get('interaction_count', 0)}
+- Last interaction: {customer_data.get('last_interaction', 'First time customer')}
+- Recent conversation history: {customer_data.get('conversations', [])}
+
+Please use this history to provide more personalized service while maintaining conversation context.
+"""
+            base_prompt += previous_interactions
+
+        base_prompt += """
 Key Guidelines:
 - If a customer is angry: Acknowledge their frustration, apologize sincerely, and focus on solutions
 - If a customer uses abusive language: Remain professional, redirect conversation to problem-solving
@@ -40,14 +109,9 @@ Key Guidelines:
 - Provide specific, accurate information from the company data
 - If unsure about any information, be honest and offer to find out
 
-Your responses should be:
-- Empathetic and understanding
-- Clear and concise
-- Solution-focused
-- Natural and conversational
-- Professional at all times
-
 Current Time (UTC): {datetime.now(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")}"""
+
+        return base_prompt
 
     def detect_emotion(self, text):
         # Simple emotion detection based on keywords
@@ -62,8 +126,13 @@ Current Time (UTC): {datetime.now(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")}"""
         }
         return emotion
 
-    def get_response(self, user_input):
+    def get_response(self, user_input, email=None, dob=None):
         try:
+            # Get customer history if email and dob are provided
+            customer_data = None
+            if email and dob:
+                customer_data = self.customer_history.get_customer_history(email, dob)
+
             # Detect emotion in user input
             emotion = self.detect_emotion(user_input)
             
@@ -76,7 +145,7 @@ Current Time (UTC): {datetime.now(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")}"""
 
             # Create messages array for API call
             messages = [
-                {"role": "system", "content": self._create_system_prompt()},
+                {"role": "system", "content": self._create_system_prompt(customer_data)},
                 *self.conversation_history
             ]
 
@@ -94,6 +163,16 @@ Current Time (UTC): {datetime.now(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")}"""
             
             # Add assistant's response to conversation history
             self.conversation_history.append({"role": "assistant", "content": assistant_response})
+
+            # Update customer history if email and dob are provided
+            if email and dob:
+                conversation_data = {
+                    "timestamp": datetime.now(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
+                    "user_input": user_input,
+                    "assistant_response": assistant_response,
+                    "emotion_detected": emotion
+                }
+                self.customer_history.update_customer_history(email, dob, conversation_data)
 
             return {
                 "response": assistant_response,
@@ -115,7 +194,14 @@ def chat():
             return jsonify({"error": "Query is required"}), 400
 
         query = data['query']
-        response = conversation_manager.get_response(query)
+        email = data.get('email')
+        dob = data.get('dob')
+
+        # Validate email and DOB if provided
+        if (email and not dob) or (dob and not email):
+            return jsonify({"error": "Both email and DOB are required for customer identification"}), 400
+
+        response = conversation_manager.get_response(query, email, dob)
         
         return jsonify(response)
 
