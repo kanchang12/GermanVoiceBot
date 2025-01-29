@@ -131,7 +131,7 @@ class ConversationManager:
                 }
             
             # Process speech
-            processed_input = self.process_speech(user_input)
+            processed_input = user_input.strip().lower()
             
             # Get emotion context
             emotions = self.detect_emotion_and_context(processed_input)
