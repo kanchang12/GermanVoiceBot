@@ -170,36 +170,26 @@ def handle_input():
     # Get caller's phone number
     phone_number = request.form.get('From', '')
     
-    # Get user input (speech or dtmf)
+    # Get user speech input
     user_speech = request.form.get('SpeechResult')
-    user_digits = request.form.get('Digits')
 
-    # Determine context based on input
-    context = None
-    if user_digits:
-        context = conversation_manager.menu.get(user_digits)
-    
-    # Get response from conversation manager
-    if user_speech or user_digits:
-        input_text = user_speech if user_speech else f"Menu option {user_digits}"
-        chat_response = conversation_manager.get_response(input_text, phone_number, context)
+    if user_speech:
+        # Get response from conversation manager
+        chat_response = conversation_manager.get_response(user_speech, phone_number)
         
-        # Handle response
+        # Say the response
         response.say(chat_response['response'], voice="man", language="en-GB")
         
-        # If emotion detected, handle accordingly
-        if chat_response['emotion_detected']['is_angry'] or chat_response['emotion_detected']['is_abusive']:
-            response.say("I understand you're frustrated. Let me transfer you to a human agent.", 
-                        voice="man", language="en-GB")
-            response.dial("+1234567890")  # Replace with actual agent number
-        else:
-            # Continue conversation
-            gather = Gather(input='speech', action='/handle-input', method='POST', language='en-GB')
-            gather.say("Is there anything else I can help you with?", voice="man", language="en-GB")
-            response.append(gather)
+        # Important: Add new Gather for next input
+        gather = Gather(input='speech', action='/handle-input', method='POST', language='en-GB')
+        response.append(gather)
+        
+        # Add fallback in case no input is received
+        response.say("I didn't catch that. Could you please repeat?", voice="man", language="en-GB")
     else:
         response.say("I didn't catch that. Could you please repeat?", voice="man", language="en-GB")
-        response.redirect('/incoming-call')
+        gather = Gather(input='speech', action='/handle-input', method='POST', language='en-GB')
+        response.append(gather)
 
     return str(response)
 
