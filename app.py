@@ -113,125 +113,134 @@ The Bavarian Bierhaus is more than just a restaurant; it’s an experience. From
 class ConversationManager:
     def __init__(self):
         self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-        self.conversation_memory = {}
-        self.memory_timeout = 300  # 5 minutes
-        self.response_cache = {}
-        self.current_time = datetime.now(pytz.UTC)
+        self.conversations = {}
 
-    def detect_emotion_and_context(self, text):
-        # Simple emotion detection implementation
-        emotions = {
-            'positive': any(word in text.lower() for word in ['happy', 'great', 'good', 'thanks', 'wonderful']),
-            'negative': any(word in text.lower() for word in ['angry', 'upset', 'bad', 'terrible', 'wrong']),
-            'urgent': any(word in text.lower() for word in ['emergency', 'urgent', 'immediately', 'asap'])
-        }
-        return {k: v for k, v in emotions.items() if v}
-
-    def get_response(self, user_input, phone_number=None, call_sid=None):
+    def get_response(self, user_input, call_sid=None):
         try:
-            current_time = datetime.now(pytz.UTC)
-            
-            # Initialize or get conversation memory
-            if call_sid not in self.conversation_memory:
-                self.conversation_memory[call_sid] = {
-                    'messages': [],
-                    'timestamp': current_time,
-                    'start_time': current_time
+            # Initialize new conversation or get existing
+            if call_sid not in self.conversations:
+                self.conversations[call_sid] = []
+
+            # Clean and prepare user input
+            processed_input = user_input.strip()
+
+            # Prevent exact repetition of last response
+            if self.conversations[call_sid] and self.conversations[call_sid][-1].get('response') == processed_input:
+                return {"response": "I understand. What else would you like to know?"}
+
+            # Build system prompt
+            messages = [
+                {
+                    "role": "system",
+                    "content": """You are James, a restaurant voice assistant. Important rules:
+                    1. Give short, direct responses under 30 words
+                    2. Never suggest calling back or checking websites
+                    3. If information isn't in data, give a logical answer based on typical restaurant practices
+                    4. Never say you'll check with the team - provide a helpful answer
+                    5. Speak naturally like a person
+                    6. Don't ask if you can help at the end of responses"""
                 }
+            ]
+
+            # Add relevant conversation history (last 2 exchanges only)
+            recent_history = self.conversations[call_sid][-4:] if self.conversations[call_sid] else []
+            messages.extend(recent_history)
             
-            # Process speech
-            processed_input = user_input.strip().lower()
-            
-            # Get emotion context
-            emotions = self.detect_emotion_and_context(processed_input)
-            
-            # Calculate time in conversation
-            time_diff = (current_time - self.conversation_memory[call_sid]['start_time']).total_seconds()
-            
-            if time_diff <= self.memory_timeout:
-                # Build conversation history
-                messages = [
-                    {
-                        "role": "system",
-                        "content": f"""
-                        You are James, a knowledgeable restaurant assistant for our establishment.
-                        Current time: {current_time.strftime('%Y-%m-%d %H:%M:%S')} UTC
+            # Add current user input
+            messages.append({"role": "user", "content": processed_input})
 
-                        Restaurant Information:
-                        {my_sample_data}
+            # Get response from OpenAI with tight constraints
+            response = self.client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=messages,
+                max_tokens=50,  # Limit token length for faster response
+                temperature=0.7,
+                presence_penalty=0.6,  # Reduce repetition
+                frequency_penalty=0.6   # Reduce repetition
+            )
 
-                        Key Guidelines:
-                        1. Speak naturally and warmly like a real person
-                        2. Never direct customers to check websites or other sources
-                        3. Only provide information that exists in the restaurant data
-                        4. If information isn't in the reference data, politely say you'll check with the team
-                        5. Don't repeat phrases unless specifically asked
-                        6. Maintain conversation context and reference previous discussion points
-                        7. Be direct and helpful - avoid unnecessarily repeating "How may I assist you"
-                        8. Use the full conversation history to provide context-aware responses
-                        """
-                    }
-                ]
+            assistant_response = response.choices[0].message.content.strip()
 
-                # Add conversation history
-                messages.extend(self.conversation_memory[call_sid]['messages'])
-                messages.append({"role": "user", "content": processed_input})
+            # Store conversation
+            self.conversations[call_sid].append({"role": "user", "content": processed_input})
+            self.conversations[call_sid].append({"role": "assistant", "content": assistant_response})
 
-                try:
-                    # Call OpenAI API
-                    response = self.client.chat.completions.create(
-                        model="gpt-4-turbo-preview",
-                        messages=messages,
-                        max_tokens=150,
-                        temperature=0.7
-                    )
-
-                    assistant_response = response.choices[0].message.content.strip()
-
-                    # Update conversation memory
-                    self.conversation_memory[call_sid]['messages'].extend([
-                        {"role": "user", "content": processed_input},
-                        {"role": "assistant", "content": assistant_response}
-                    ])
-
-                    return {
-                        "response": assistant_response,
-                        "emotions_detected": emotions,
-                        "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "conversation_duration": time_diff
-                    }
-                except Exception as api_error:
-                    print(f"OpenAI API Error: {api_error}")
-                    return {
-                        "response": "I apologize, but I'm having trouble processing your request. Could you please repeat that?",
-                        "emotions_detected": emotions,
-                        "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "conversation_duration": time_diff
-                    }
-            else:
-                # Reset conversation after timeout
-                self.conversation_memory[call_sid] = {
-                    'messages': [],
-                    'timestamp': current_time,
-                    'start_time': current_time
-                }
-                return {
-                    "response": "I apologize, but our conversation timeout has been reached. How may I help you with your new request?",
-                    "emotions_detected": emotions,
-                    "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "conversation_duration": time_diff
-                }
+            return {"response": assistant_response}
 
         except Exception as e:
             print(f"Error in get_response: {e}")
-            return {
-                "response": "I apologize, but I'm having trouble understanding. Could you please repeat that?",
-                "error": str(e)
-            }
+            return {"response": "I understand. How else can I help you today?"}
 
-# Initialize manager
+# Voice handling routes
+@app.route("/incoming-call", methods=['POST'])
+def incoming_call():
+    response = VoiceResponse()
+    gather = Gather(
+        input='speech dtmf',
+        action='/handle-input',
+        method='POST',
+        language='en-GB',
+        speechTimeout='auto',
+        enhanced=True,
+        speechModel='phone_call'
+    )
+    
+    gather.say(
+        "Hello, I'm James from The Bavarian Bierhaus. How can I help you today?",
+        voice="man",
+        language="en-GB"
+    )
+    
+    response.append(gather)
+    return str(response)
+
+@app.route("/handle-input", methods=['POST'])
+def handle_input():
+    response = VoiceResponse()
+    user_speech = request.form.get('SpeechResult', '')
+    call_sid = request.form.get('CallSid', '')
+
+    if user_speech:
+        # Get response from conversation manager
+        chat_response = conversation_manager.get_response(user_speech, call_sid)
+        
+        gather = Gather(
+            input='speech dtmf',
+            action='/handle-input',
+            method='POST',
+            language='en-GB',
+            speechTimeout='auto',
+            enhanced=True,
+            speechModel='phone_call'
+        )
+        
+        gather.say(
+            chat_response['response'],
+            voice="man",
+            language="en-GB"
+        )
+        
+        response.append(gather)
+    else:
+        gather = Gather(
+            input='speech dtmf',
+            action='/handle-input',
+            method='POST',
+            language='en-GB',
+            speechTimeout='auto',
+            enhanced=True
+        )
+        gather.say(
+            "I didn't catch that, could you please repeat?",
+            voice="man",
+            language="en-GB"
+        )
+        response.append(gather)
+
+    return str(response)
+
+# Initialize conversation manager
 conversation_manager = ConversationManager()
-
 
 @app.route("/incoming-call", methods=['POST'])
 def incoming_call():
