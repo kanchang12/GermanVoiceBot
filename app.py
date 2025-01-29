@@ -118,6 +118,15 @@ class ConversationManager:
         self.response_cache = {}
         self.current_time = datetime.now(pytz.UTC)
 
+    def detect_emotion_and_context(self, text):
+        # Simple emotion detection implementation
+        emotions = {
+            'positive': any(word in text.lower() for word in ['happy', 'great', 'good', 'thanks', 'wonderful']),
+            'negative': any(word in text.lower() for word in ['angry', 'upset', 'bad', 'terrible', 'wrong']),
+            'urgent': any(word in text.lower() for word in ['emergency', 'urgent', 'immediately', 'asap'])
+        }
+        return {k: v for k, v in emotions.items() if v}
+
     def get_response(self, user_input, phone_number=None, call_sid=None):
         try:
             current_time = datetime.now(pytz.UTC)
@@ -164,32 +173,41 @@ class ConversationManager:
                     }
                 ]
 
-                # Add ALL previous conversation history
+                # Add conversation history
                 messages.extend(self.conversation_memory[call_sid]['messages'])
                 messages.append({"role": "user", "content": processed_input})
 
-                # Synchronous call to OpenAI (no async/await)
-                response = self.client.chat.completions.create(
-                    model="gpt-4-turbo-preview",
-                    messages=messages,
-                    max_tokens=150,
-                    temperature=0.7
-                )
+                try:
+                    # Call OpenAI API
+                    response = self.client.chat.completions.create(
+                        model="gpt-4-turbo-preview",
+                        messages=messages,
+                        max_tokens=150,
+                        temperature=0.7
+                    )
 
-                assistant_response = response.choices[0].message.content.strip()
+                    assistant_response = response.choices[0].message.content.strip()
 
-                # Update conversation memory with new messages
-                self.conversation_memory[call_sid]['messages'].extend([ 
-                    {"role": "user", "content": processed_input},
-                    {"role": "assistant", "content": assistant_response}
-                ])
+                    # Update conversation memory
+                    self.conversation_memory[call_sid]['messages'].extend([
+                        {"role": "user", "content": processed_input},
+                        {"role": "assistant", "content": assistant_response}
+                    ])
 
-                return {
-                    "response": assistant_response,
-                    "emotions_detected": emotions,
-                    "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "conversation_duration": time_diff
-                }
+                    return {
+                        "response": assistant_response,
+                        "emotions_detected": emotions,
+                        "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "conversation_duration": time_diff
+                    }
+                except Exception as api_error:
+                    print(f"OpenAI API Error: {api_error}")
+                    return {
+                        "response": "I apologize, but I'm having trouble processing your request. Could you please repeat that?",
+                        "emotions_detected": emotions,
+                        "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "conversation_duration": time_diff
+                    }
             else:
                 # Reset conversation after timeout
                 self.conversation_memory[call_sid] = {
@@ -206,7 +224,10 @@ class ConversationManager:
 
         except Exception as e:
             print(f"Error in get_response: {e}")
-            return {"error": str(e)}
+            return {
+                "response": "I apologize, but I'm having trouble understanding. Could you please repeat that?",
+                "error": str(e)
+            }
 
 # Initialize manager
 conversation_manager = ConversationManager()
