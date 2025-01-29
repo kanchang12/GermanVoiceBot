@@ -529,7 +529,7 @@ def incoming_call():
         action='/handle-input',
         method='POST',
         language='en-GB',
-        speechTimeout='auto',
+        speechTimeout='2s',
         enhanced=True
     )
     
