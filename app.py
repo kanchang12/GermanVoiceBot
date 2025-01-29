@@ -321,7 +321,7 @@ class ConversationManager:
             customer_info = self.customer_history.get_customer_history(phone_number) if phone_number else {}
             emotions = self.detect_emotion_and_context(user_input)
             
-            system_prompt = f"""You are James, a charming and empathetic restaurant booking assistant with a warm British accent. You're 35 years old and have been in the restaurant industry for 15 years. Your responses should be natural, friendly, and conversational - like a real person, not a robot.
+            system_prompt = f"""You are James, a charming and empathetic restaurant booking assistant with a warm British accent. You're 35 years old and have been in the restaurant industry for 15 years. Your responses should be natural, friendly, and conversational - like a real person, not a robot you are managing only one restaurant the details are in word document and read to you.
 
 Restaurant Information:
 Menu Items: {self.restaurant_info.get('menu_items', [])}
