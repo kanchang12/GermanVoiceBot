@@ -158,9 +158,19 @@ conversation_manager = ConversationManager()
 @app.route("/incoming-call", methods=['POST'])
 def incoming_call():
     response = VoiceResponse()
-    gather = Gather(input='speech', action='/handle-input', method='POST', language='en-GB')
+    gather = Gather(
+        input='speech', 
+        action='/handle-input', 
+        method='POST', 
+        language='en-GB',
+        timeout=3,
+        speechTimeout='auto'
+    )
     gather.say("Hi, how may I help you today?", voice="man", language="en-GB")
     response.append(gather)
+    
+    # Add redirect in case of no input
+    response.redirect('/handle-input')
     return str(response)
 
 @app.route("/handle-input", methods=['POST'])
@@ -173,24 +183,50 @@ def handle_input():
     # Get user speech input
     user_speech = request.form.get('SpeechResult')
 
-    if user_speech:
-        # Get response from conversation manager
-        chat_response = conversation_manager.get_response(user_speech, phone_number)
-        
-        # Say the response
-        response.say(chat_response['response'], voice="man", language="en-GB")
-        
-        # Important: Add new Gather for next input
-        gather = Gather(input='speech', action='/handle-input', method='POST', language='en-GB')
-        response.append(gather)
-        
-        # Add fallback in case no input is received
-        response.say("I didn't catch that. Could you please repeat?", voice="man", language="en-GB")
-    else:
-        response.say("I didn't catch that. Could you please repeat?", voice="man", language="en-GB")
-        gather = Gather(input='speech', action='/handle-input', method='POST', language='en-GB')
-        response.append(gather)
+    print(f"Received speech: {user_speech}")  # Debug log
 
+    if user_speech:
+        try:
+            # Get response from conversation manager
+            chat_response = conversation_manager.get_response(user_speech, phone_number)
+            
+            # Create a new gather
+            gather = Gather(
+                input='speech', 
+                action='/handle-input', 
+                method='POST', 
+                language='en-GB',
+                timeout=3,  # Add timeout
+                speechTimeout='auto'  # Add speech timeout
+            )
+            
+            # Say the response within the gather
+            gather.say(chat_response['response'], voice="man", language="en-GB")
+            
+            # Add the gather to the response
+            response.append(gather)
+            
+            # Fallback if no input is received
+            response.redirect('/handle-input')  # Add redirect instead of disconnecting
+            
+        except Exception as e:
+            print(f"Error in handle_input: {e}")  # Debug log
+            response.say("I apologize, but I encountered an error. Please try again.", voice="man", language="en-GB")
+            response.redirect('/incoming-call')
+    else:
+        gather = Gather(
+            input='speech', 
+            action='/handle-input', 
+            method='POST', 
+            language='en-GB',
+            timeout=3,
+            speechTimeout='auto'
+        )
+        gather.say("I didn't catch that. Could you please repeat?", voice="man", language="en-GB")
+        response.append(gather)
+        response.redirect('/handle-input')
+
+    print(f"Returning response: {str(response)}")  # Debug log
     return str(response)
 
 @app.route('/make-call', methods=['POST'])
