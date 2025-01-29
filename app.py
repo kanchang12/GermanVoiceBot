@@ -516,14 +516,16 @@ def incoming_call():
         action='/handle-input',
         method='POST',
         language='en-GB',
-        speechTimeout='auto',
+        speechTimeout='1s',
+        speechModel='phone_call',
+        interim=True,
         enhanced=True
     )
     
     # Warm, friendly greeting
     gather.say(
         "Hello! I'm James, your restaurant assistant. How may I help you today?",
-        voice="man",
+        voice="Polly.Brian",
         language="en-GB"
     )
     
