@@ -278,33 +278,29 @@ class ConversationManager:
         self.conversation_memory = {}
         self.memory_timeout = 300  # 5 minutes in seconds
         self.restaurant_info = self.doc_reader.get_info()
-        
-        # Add language configuration
-        self.language_configs = {
-            'en': {'voice': 'man', 'language': 'en-GB'},
-            'bn': {'voice': 'neutral', 'language': 'bn-IN'},
-            'de': {'voice': 'neutral', 'language': 'de-DE'}
-        }
 
-    def detect_language(self, text):
-        """Detect input language using GPT"""
-        messages = [
-            {"role": "system", "content": "Identify the language of the following text. Respond with only 'en', 'bn', or 'de'."},
-            {"role": "user", "content": text}
-        ]
-        response = self.client.chat.completions.create(
-            model="gpt-4",
-            messages=messages,
-            max_tokens=2,
-            temperature=0
-        )
-        return response.choices[0].message.content.strip()
+    def detect_emotion_and_context(self, text):
+        emotion_indicators = {
+            'angry': ['angry', 'furious', 'upset', 'horrible', 'terrible', 'stupid', 'useless'],
+            'frustrated': ['annoying', 'frustrating', 'difficult', 'problem', 'issue'],
+            'urgent': ['immediately', 'urgent', 'asap', 'emergency', 'right now'],
+            'positive': ['happy', 'great', 'wonderful', 'excellent', 'perfect', 'thanks'],
+            'confused': ['confused', 'unsure', 'don\'t understand', 'what do you mean']
+        }
+        
+        text_lower = text.lower()
+        emotions = {
+            emotion: any(word in text_lower for word in words)
+            for emotion, words in emotion_indicators.items()
+        }
+        
+        emotions['is_shouting'] = text.isupper() or text.count('!') > 1
+        emotions['has_interruption'] = '...' in text or '?' in text
+        
+        return emotions
 
     def get_response(self, user_input, phone_number=None, call_sid=None):
         try:
-            # Detect language
-            detected_language = self.detect_language(user_input)
-            
             # Get or initialize conversation memory
             current_time = datetime.now(pytz.UTC)
             if call_sid in self.conversation_memory:
@@ -325,14 +321,8 @@ class ConversationManager:
             customer_info = self.customer_history.get_customer_history(phone_number) if phone_number else {}
             emotions = self.detect_emotion_and_context(user_input)
             
-            # Language-specific system prompt
-            system_prompts = {
-                'en': """You are James, a charming restaurant booking assistant. Respond in natural English.""",
-                'bn': """আপনি জেমস, একজন রেস্টুরেন্ট বুকিং সহকারী। সহজ ও স্বাভাবিক বাংলায় উত্তর দিন।""",
-                'de': """Sie sind James, ein Restaurant-Buchungsassistent. Antworten Sie in natürlichem Deutsch ohne Akzent."""
-            }
+            system_prompt = f"""You are James, a charming and empathetic restaurant booking assistant with a warm British accent. You're 35 years old and have been in the restaurant industry for 15 years. Your responses should be natural, friendly, and conversational - like a real person, not a robot.
 
-            base_prompt = f"""
 Restaurant Information:
 Menu Items: {self.restaurant_info.get('menu_items', [])}
 Daily Specials: {self.restaurant_info.get('specials', [])}
@@ -343,7 +333,11 @@ Contact Information: {self.restaurant_info.get('contact_info', {})}
 Customer History and Preferences:
 {json.dumps(customer_info, indent=2)}"""
 
-            system_prompt = system_prompts[detected_language] + base_prompt
+            # Add emotional context to prompt
+            if emotions['angry'] or emotions['is_shouting']:
+                system_prompt += "\nThe customer seems upset or frustrated. Maintain extra patience and empathy."
+            if emotions['urgent']:
+                system_prompt += "\nThe customer has an urgent request. Prioritize efficiency while maintaining friendliness."
 
             # Build conversation history
             messages = [{"role": "system", "content": system_prompt}]
@@ -371,45 +365,40 @@ Customer History and Preferences:
             if len(self.conversation_memory[call_sid]['messages']) > 20:
                 self.conversation_memory[call_sid]['messages'] = self.conversation_memory[call_sid]['messages'][-20:]
 
-            # Update histories
-            self._update_histories(phone_number, call_sid, user_input, assistant_response, emotions)
+            # Update customer history
+            if phone_number:
+                conversation_data = {
+                    "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "user_input": user_input,
+                    "assistant_response": assistant_response,
+                    "emotions_detected": emotions,
+                    "call_sid": call_sid
+                }
+                self.customer_history.update_customer_history(phone_number, conversation_data)
+
+            # Update call history
+            if call_sid:
+                call_data = {
+                    "call_sid": call_sid,
+                    "phone_number": phone_number,
+                    "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "emotions_detected": emotions,
+                    "conversation": {
+                        "user_input": user_input,
+                        "assistant_response": assistant_response
+                    }
+                }
+                self.call_history.update_call(call_data)
 
             return {
                 "response": assistant_response,
                 "emotions_detected": emotions,
-                "language": detected_language,
                 "timestamp": current_time.strftime("%Y-%m-%d %H:%M:%S")
             }
 
         except Exception as e:
             print(f"Error in get_response: {e}")
             return {"error": str(e)}
-
-    def _update_histories(self, phone_number, call_sid, user_input, assistant_response, emotions):
-        # Update customer history
-        if phone_number:
-            conversation_data = {
-                "timestamp": datetime.now(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
-                "user_input": user_input,
-                "assistant_response": assistant_response,
-                "emotions_detected": emotions,
-                "call_sid": call_sid
-            }
-            self.customer_history.update_customer_history(phone_number, conversation_data)
-
-        # Update call history
-        if call_sid:
-            call_data = {
-                "call_sid": call_sid,
-                "phone_number": phone_number,
-                "timestamp": datetime.now(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
-                "emotions_detected": emotions,
-                "conversation": {
-                    "user_input": user_input,
-                    "assistant_response": assistant_response
-                }
-            }
-            self.call_history.update_call(call_data)
 
 
 # Initialize manager
@@ -455,35 +444,6 @@ def handle_input():
             call_sid=call_sid
         )
         
-        # Get language-specific voice configuration
-        voice_config = conversation_manager.language_configs[chat_response['language']]
-        
-        gather = Gather(
-            input='speech dtmf',
-            action='/handle-input',
-            method='POST',
-            language=voice_config['language'],
-            speechTimeout='auto',
-            enhanced=True
-        )
-        
-        # Use language-appropriate voice
-        gather.say(
-            chat_response['response'],
-            voice=voice_config['voice'],
-            language=voice_config['language']
-        )
-        
-        response.append(gather)
-    else:
-        # Multi-language fallback messages
-        fallback_messages = {
-            'en': "I didn't quite catch that. Could you please repeat?",
-            'bn': "আমি ঠিক বুঝতে পারিনি। অনুগ্রহ করে আবার বলুন।",
-            'de': "Ich habe das nicht ganz verstanden. Könnten Sie das bitte wiederholen?"
-        }
-        
-        # Default to English for fallback
         gather = Gather(
             input='speech dtmf',
             action='/handle-input',
@@ -493,13 +453,28 @@ def handle_input():
             enhanced=True
         )
         
-        for lang, msg in fallback_messages.items():
-            voice_config = conversation_manager.language_configs[lang]
-            gather.say(
-                msg,
-                voice=voice_config['voice'],
-                language=voice_config['language']
-            )
+        gather.say(
+            chat_response['response'],
+            voice="man",
+            language="en-GB"
+        )
+        
+        response.append(gather)
+    else:
+        gather = Gather(
+            input='speech dtmf',
+            action='/handle-input',
+            method='POST',
+            language='en-GB',
+            speechTimeout='auto',
+            enhanced=True
+        )
+        
+        gather.say(
+            "I didn't quite catch that. Could you please repeat what you said?",
+            voice="man",
+            language="en-GB"
+        )
         
         response.append(gather)
 
