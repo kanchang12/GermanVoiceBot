@@ -258,7 +258,7 @@ def incoming_call():
     return str(response)
 
 @app.route("/handle-input", methods=['POST'])
-async def handle_input():
+def handle_input():
     response = VoiceResponse()
     
     phone_number = request.form.get('From', '')
@@ -266,7 +266,7 @@ async def handle_input():
     user_speech = request.form.get('SpeechResult', '')
 
     if user_speech:
-        chat_response = await conversation_manager.get_response(
+        chat_response = conversation_manager.get_response(
             user_speech,
             phone_number=phone_number,
             call_sid=call_sid
@@ -311,6 +311,7 @@ async def handle_input():
         response.append(gather)
 
     return str(response)
+
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
