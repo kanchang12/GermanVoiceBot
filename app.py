@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from openai import OpenAI
 import os
 from dotenv import load_dotenv
@@ -9,24 +9,33 @@ import json
 import hashlib
 from gtts import gTTS
 import speech_recognition as sr
+from twilio.rest import Client
+from twilio.twiml.voice_response import VoiceResponse, Gather
 import io
 
 # Load environment variables
 load_dotenv()
 
-# Set up directories and file paths
+# Setup paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 WORD_DOC_PATH = os.path.join(DATA_DIR, 'example_data.docx')
 CUSTOMER_HISTORY_PATH = os.path.join(DATA_DIR, 'customer_history.json')
 
-# Create data directory if it doesn't exist
+# Create data directory
 os.makedirs(DATA_DIR, exist_ok=True)
 
+# Initialize Flask
 app = Flask(__name__)
 
+# Twilio setup
+TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
+TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
+TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER')
+twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
 class CustomerHistory:
-    def __init__(self, file_path='customer_history.json'):
+    def __init__(self, file_path=CUSTOMER_HISTORY_PATH):
         self.file_path = file_path
         self.history = self.load_history()
 
@@ -47,94 +56,42 @@ class CustomerHistory:
         except Exception as e:
             print(f"Error saving history: {e}")
 
-    def get_customer_key(self, email, dob):
-        return hashlib.md5(f"{email.lower()}{dob}".encode()).hexdigest()
+    def get_customer_key(self, phone_number):
+        return hashlib.md5(phone_number.encode()).hexdigest()
 
-    def get_customer_history(self, email, dob):
-        customer_key = self.get_customer_key(email, dob)
-        return self.history.get(customer_key, {})
-
-    def update_customer_history(self, email, dob, conversation_data):
-        customer_key = self.get_customer_key(email, dob)
+    def update_customer_history(self, phone_number, conversation_data):
+        customer_key = self.get_customer_key(phone_number)
         
         if customer_key not in self.history:
             self.history[customer_key] = {
-                "email": email,
-                "dob": dob,
+                "phone": phone_number,
                 "conversations": [],
                 "last_interaction": None,
-                "interaction_count": 0
+                "bookings": [],
+                "complaints": []
             }
 
         self.history[customer_key]["conversations"].append(conversation_data)
         self.history[customer_key]["last_interaction"] = datetime.now(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S")
-        self.history[customer_key]["interaction_count"] += 1
-        
-        if len(self.history[customer_key]["conversations"]) > 10:
-            self.history[customer_key]["conversations"] = self.history[customer_key]["conversations"][-10:]
-
         self.save_history()
-
-class VoiceHandler:
-    def __init__(self):
-        self.recognizer = sr.Recognizer()
-
-    def speech_to_text(self, audio_file):
-        try:
-            with sr.AudioFile(audio_file) as source:
-                audio = self.recognizer.record(source)
-                text = self.recognizer.recognize_google(audio)
-                return text
-        except Exception as e:
-            print(f"Speech-to-text error: {e}")
-            return None
-
-    def text_to_speech(self, text):
-        try:
-            tts = gTTS(text=text, lang='en')
-            audio_buffer = io.BytesIO()
-            tts.write_to_fp(audio_buffer)
-            audio_buffer.seek(0)
-            return audio_buffer
-        except Exception as e:
-            print(f"Text-to-speech error: {e}")
-            return None
 
 class ConversationManager:
     def __init__(self):
         self.openai_api_key = os.getenv('OPENAI_API_KEY')
         self.client = OpenAI(api_key=self.openai_api_key)
-        self.conversation_history = []
-        self.dummy_data = self.load_word_document('example_data.docx')
         self.customer_history = CustomerHistory()
-
-    def load_word_document(self, file_path):
-        doc = Document(file_path)
-        return '\n'.join([paragraph.text for paragraph in doc.paragraphs])
-
-    def _create_system_prompt(self, customer_data=None):
-        base_prompt = f"""You are an empathetic and professional customer service AI assistant. Your role is to:
-
-1. ALWAYS remain calm and professional, especially when dealing with angry or frustrated customers
-2. Handle interruptions gracefully and maintain conversation flow
-3. De-escalate tense situations by acknowledging customer's feelings
-4. Provide accurate information based on the following company data:
-{self.dummy_data}
-"""
-        if customer_data:
-            previous_interactions = f"""
-Customer History:
-- Previous interactions: {customer_data.get('interaction_count', 0)}
-- Last interaction: {customer_data.get('last_interaction', 'First time customer')}
-- Recent conversation history: {customer_data.get('conversations', [])}
-"""
-            base_prompt += previous_interactions
-
-        return base_prompt
+        
+        # Menu options
+        self.menu = {
+            "1": "Make a Booking",
+            "2": "Check Booking Status",
+            "3": "File a Complaint",
+            "4": "Speak to an Agent"
+        }
 
     def detect_emotion(self, text):
-        angry_words = ['angry', 'furious', 'upset', 'horrible', 'terrible', 'stupid', 'useless', 'waste']
-        abusive_words = ['damn', 'hell', 'stupid', 'idiot', 'fool', 'bloody']
+        angry_words = ['angry', 'furious', 'upset', 'horrible', 'terrible', 'stupid', 'useless']
+        abusive_words = ['damn', 'hell', 'stupid', 'idiot', 'fool']
         
         text_lower = text.lower()
         emotion = {
@@ -144,45 +101,40 @@ Customer History:
         }
         return emotion
 
-    def get_response(self, user_input, email=None, dob=None):
+    def get_response(self, user_input, phone_number=None, context=None):
         try:
-            customer_data = None
-            if email and dob:
-                customer_data = self.customer_history.get_customer_history(email, dob)
-
             emotion = self.detect_emotion(user_input)
             
-            self.conversation_history.append({"role": "user", "content": user_input})
-            
-            if len(self.conversation_history) > 10:
-                self.conversation_history = self.conversation_history[-10:]
+            # Create system prompt based on context and emotion
+            system_prompt = "You are a professional customer service AI assistant with a British accent (male, age 35). "
+            if emotion['is_angry'] or emotion['is_abusive']:
+                system_prompt += "The customer seems upset. Remain calm and professional. "
+            if context:
+                system_prompt += f"Current context: {context}. "
 
             messages = [
-                {"role": "system", "content": self._create_system_prompt(customer_data)},
-                *self.conversation_history
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input}
             ]
 
             response = self.client.chat.completions.create(
                 model="gpt-4",
                 messages=messages,
                 max_tokens=150,
-                n=1,
-                stop=None,
-                temperature=0.7,
+                temperature=0.7
             )
 
             assistant_response = response.choices[0].message.content.strip()
-            
-            self.conversation_history.append({"role": "assistant", "content": assistant_response})
 
-            if email and dob:
+            if phone_number:
                 conversation_data = {
                     "timestamp": datetime.now(pytz.UTC).strftime("%Y-%m-%d %H:%M:%S"),
                     "user_input": user_input,
                     "assistant_response": assistant_response,
-                    "emotion_detected": emotion
+                    "emotion_detected": emotion,
+                    "context": context
                 }
-                self.customer_history.update_customer_history(email, dob, conversation_data)
+                self.customer_history.update_customer_history(phone_number, conversation_data)
 
             return {
                 "response": assistant_response,
@@ -193,60 +145,83 @@ Customer History:
         except Exception as e:
             return {"error": str(e)}
 
+# Initialize managers
 conversation_manager = ConversationManager()
-voice_handler = VoiceHandler()
 
-@app.route('/chat', methods=['POST'])
-def chat():
+@app.route("/incoming-call", methods=['POST'])
+def incoming_call():
+    response = VoiceResponse()
+    gather = Gather(input='speech dtmf', action='/handle-input', method='POST', language='en-GB')
+    gather.say("Welcome to our service. Please select from the following options:", voice="man", language="en-GB")
+    
+    # Read out menu options
+    for key, value in conversation_manager.menu.items():
+        gather.say(f"Press {key} for {value}", voice="man", language="en-GB")
+    
+    response.append(gather)
+    return str(response)
+
+@app.route("/handle-input", methods=['POST'])
+def handle_input():
+    response = VoiceResponse()
+    
+    # Get caller's phone number
+    phone_number = request.form.get('From', '')
+    
+    # Get user input (speech or dtmf)
+    user_speech = request.form.get('SpeechResult')
+    user_digits = request.form.get('Digits')
+
+    # Determine context based on input
+    context = None
+    if user_digits:
+        context = conversation_manager.menu.get(user_digits)
+    
+    # Get response from conversation manager
+    if user_speech or user_digits:
+        input_text = user_speech if user_speech else f"Menu option {user_digits}"
+        chat_response = conversation_manager.get_response(input_text, phone_number, context)
+        
+        # Handle response
+        response.say(chat_response['response'], voice="man", language="en-GB")
+        
+        # If emotion detected, handle accordingly
+        if chat_response['emotion_detected']['is_angry'] or chat_response['emotion_detected']['is_abusive']:
+            response.say("I understand you're frustrated. Let me transfer you to a human agent.", 
+                        voice="man", language="en-GB")
+            response.dial("+1234567890")  # Replace with actual agent number
+        else:
+            # Continue conversation
+            gather = Gather(input='speech', action='/handle-input', method='POST', language='en-GB')
+            gather.say("Is there anything else I can help you with?", voice="man", language="en-GB")
+            response.append(gather)
+    else:
+        response.say("I didn't catch that. Could you please repeat?", voice="man", language="en-GB")
+        response.redirect('/incoming-call')
+
+    return str(response)
+
+@app.route('/make-call', methods=['POST'])
+def make_call():
     try:
         data = request.json
-        if not data or 'query' not in data:
-            return jsonify({"error": "Query is required"}), 400
+        if not data or 'phone_number' not in data:
+            return jsonify({"error": "Phone number is required"}), 400
 
-        query = data['query']
-        email = data.get('email')
-        dob = data.get('dob')
-
-        if (email and not dob) or (dob and not email):
-            return jsonify({"error": "Both email and DOB are required for customer identification"}), 400
-
-        response = conversation_manager.get_response(query, email, dob)
+        call = twilio_client.calls.create(
+            to=data['phone_number'],
+            from_=TWILIO_PHONE_NUMBER,
+            url=request.url_root + 'incoming-call'
+        )
         
-        return jsonify(response)
+        return jsonify({
+            "status": "success",
+            "call_sid": call.sid
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/voice-chat', methods=['POST'])
-def voice_chat():
-    try:
-        if 'audio' not in request.files:
-            return jsonify({"error": "No audio file provided"}), 400
-
-        audio_file = request.files['audio']
-        email = request.form.get('email')
-        dob = request.form.get('dob')
-        
-        text = voice_handler.speech_to_text(audio_file)
-        if not text:
-            return jsonify({"error": "Could not understand audio"}), 400
-
-        response = conversation_manager.get_response(text, email, dob)
-
-        audio_buffer = voice_handler.text_to_speech(response['response'])
-        if audio_buffer:
-            return send_file(
-                audio_buffer,
-                mimetype='audio/mp3',
-                as_attachment=True,
-                download_name='response.mp3'
-            )
-        else:
-            return jsonify({"error": "Failed to generate speech"}), 500
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
