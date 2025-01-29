@@ -303,19 +303,14 @@ class ConversationManager:
         try:
             # Get or initialize conversation memory
             current_time = datetime.now(pytz.UTC)
-            if call_sid in self.conversation_memory:
-                last_interaction = self.conversation_memory[call_sid]['timestamp']
-                if (current_time - last_interaction).total_seconds() > self.memory_timeout:
-                    # Reset conversation if timeout exceeded
-                    self.conversation_memory[call_sid] = {
-                        'messages': [],
-                        'timestamp': current_time
-                    }
-            else:
+            if call_sid not in self.conversation_memory:
                 self.conversation_memory[call_sid] = {
                     'messages': [],
                     'timestamp': current_time
                 }
+            else:
+                # Only update timestamp, don't reset messages
+                self.conversation_memory[call_sid]['timestamp'] = current_time
 
             # Get customer history and emotional context
             customer_info = self.customer_history.get_customer_history(phone_number) if phone_number else {}
@@ -418,7 +413,10 @@ The Bavarian Bierhaus is more than just a restaurant; it’s an experience. From
 
             """
             
-            system_prompt = f"""You are James, a charming and empathetic restaurant booking assistant with a warm British accent. You're 35 years old and have been in the restaurant industry for 15 years. Your responses should be natural, friendly, and conversational - like a real person, not a robot.
+            system_prompt = f"""All discussions will be strictly based on the following data:
+            {my_sample_data}
+            
+            You are James, a charming and empathetic restaurant booking assistant with a warm British accent. You're 35 years old and have been in the restaurant industry for 15 years You work for one particular restaurant the details are in {my_sample_data}. Your responses should be natural, friendly, and conversational - like a real person, not a robot.
             
             Restaurant Information:
             Menu Items: {self.restaurant_info.get('menu_items', [])}
